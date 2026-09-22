@@ -6,6 +6,8 @@
 #   KEEPALIVE_DELAY      secondes avant ping (défaut 3300 = 55 min)
 #   KEEPALIVE_MAX_PINGS  pings consécutifs sans activité humaine avant abandon
 #                        (défaut 0 = sans limite, on ping tant que la session vit)
+#   KEEPALIVE_PROMPT     texte du ping ; le préfixe [keepalive] est ajouté s'il manque
+#   KEEPALIVE_STATS      1 (défaut) joint un instantané CPU/RAM/disque/GPU au ping, 0 l'omet
 #   KEEPALIVE_DISABLE=1  désactive complètement
 
 [ "${KEEPALIVE_DISABLE:-0}" = "1" ] && exit 0
@@ -20,7 +22,16 @@ MAX=${KEEPALIVE_MAX_PINGS:-0}
 # plafond ignoré : on revient aux défauts plutôt que de désactiver sans le dire.
 case "$DELAY" in ''|*[!0-9]*) DELAY=3300 ;; esac
 case "$MAX"   in ''|*[!0-9]*) MAX=0     ;; esac
-PING_MSG="ping keepalive — réponds uniquement OK"
+
+# Le préfixe est la signature qui distingue nos pings d'un vrai message, pour le
+# compteur. Il survit à un changement de texte et à l'ajout des stats, d'où son
+# ajout d'office si un KEEPALIVE_PROMPT personnalisé l'oublie.
+PREFIX="[keepalive]"
+DEFAULT_PROMPT="[keepalive] Réveil automatique après inactivité. Relis la mission confiée dans cette session. Cas 1 : aucune mission en cours, ou tout est terminé → réponds uniquement \"OK\". Cas 2 : des runs que tu as lancées tournent encore → vérifie brièvement qu'elles sont vivantes et progressent (pgrep, queue, dernières lignes de log) ; réponds \"OK\", ou signale en une ligne ce qui a planté. Cas 3 : la mission t'autorise à enchaîner (ex. recherche d'hyperparamètres) et les ressources sont libres → prends du recul : compare les derniers résultats aux précédents, choisis la prochaine run selon les critères fixés dans la mission, lance-la, et résume en deux lignes ce que tu as appris et ce que tu lances. Dans tous les cas : ne sors pas du périmètre défini avant la loop, et si le budget ou le critère d'arrêt est atteint, ou si deux runs consécutives ont échoué pour la même raison, ne relance pas — dis-le en une ligne et attends."
+PROMPT_MSG=${KEEPALIVE_PROMPT:-$DEFAULT_PROMPT}
+case "$PROMPT_MSG" in "$PREFIX"*) ;; *) PROMPT_MSG="$PREFIX $PROMPT_MSG" ;; esac
+# Un retour à la ligne validerait la saisie à mi-chemin : on l'aplatit en espace.
+PROMPT_MSG=$(printf '%s' "$PROMPT_MSG" | tr '\n\r' '  ')
 
 INPUT=$(cat)
 SESSION_ID=$(jq -r '.session_id // empty' <<<"$INPUT")
@@ -39,8 +50,8 @@ CNT_FILE="$STATE_DIR/$SESSION_ID.count"
 # comme pour n'importe quelle activité — mais il ne doit pas remettre le
 # compteur à zéro : personne n'est revenu devant le clavier.
 if [ "$EVENT" = "UserPromptSubmit" ]; then
-  case "$PROMPT" in
-    "$PING_MSG")            # notre propre ping
+  case "$(unwrap_prompt "$PROMPT")" in
+    "$PREFIX"*)             # notre propre ping
       echo $(( $(cat "$CNT_FILE" 2>/dev/null || echo 0) + 1 )) > "$CNT_FILE" ;;
     "<task-notification>"*) # prompt injecté par le système, pas par toi
       ;;
@@ -60,12 +71,22 @@ if [ "$MAX" -gt 0 ]; then
   [ "$(cat "$CNT_FILE" 2>/dev/null || echo 0)" -ge "$MAX" ] && exit 0
 fi
 
-# Nouveau timer
+# Nouveau timer. Les stats sont relevées au moment du ping, pas maintenant :
+# elles ne valent que si elles décrivent l'instant où le modèle décide.
+# `set -m` place le sous-shell dans son propre groupe de process : un signal
+# envoyé au groupe du hook quand celui-ci rend la main ne l'emporte pas avec lui.
+set -m
 (
   sleep "$DELAY"
   pane_is_idle "$TMUX_PANE" || exit 0
-  tmux send-keys -t "$TMUX_PANE" "$PING_MSG" Enter
+  MSG=$PROMPT_MSG
+  if [ "${KEEPALIVE_STATS:-1}" = "1" ]; then
+    SNAP=$(resource_snapshot)
+    [ -n "$SNAP" ] && MSG="$MSG Ressources machine à cet instant : $SNAP."
+  fi
+  send_prompt "$TMUX_PANE" "$MSG"
 ) >/dev/null 2>&1 &
 echo $! > "$PID_FILE"
 disown
+set +m
 exit 0

@@ -28,6 +28,10 @@ Hors tmux, le plugin ne fait rien du tout (silencieusement, pas d'erreur).
 
 Rien à faire : toute nouvelle session lancée dans tmux est prise en charge.
 
+Ça ne s'arme que sur ta session principale : les subagents n'ont pas de timer à eux. Quand
+un subagent lancé en arrière-plan se termine, son résultat revient dans ta session comme un
+prompt, ce qui relance le timer normalement.
+
 Ça tourne en boucle indéfiniment, tant que la session vit. Chaque ping réarme le timer
 suivant : tu fermes la session quand tu veux, le plugin ne décide jamais d'arrêter à ta place.
 
@@ -42,13 +46,30 @@ Variables d'environnement, à exporter avant de lancer `claude` :
 |-----------------------|--------|-------------------------------------------------------|
 | `KEEPALIVE_DELAY`     | 3300   | Secondes d'inactivité avant le ping (3300 = 55 min)   |
 | `KEEPALIVE_MAX_PINGS` | 0      | `0` = sans limite. Un nombre = s'arrête après N pings d'affilée |
+| `KEEPALIVE_PROMPT`    | voir ci-dessous | Le texte envoyé comme ping                   |
+| `KEEPALIVE_STATS`     | 1      | Joint un relevé CPU/RAM/disque/GPU au ping ; `0` l'omet |
 | `KEEPALIVE_DISABLE`   | 0      | `1` pour désactiver sans désinstaller                  |
 
 ```bash
 export KEEPALIVE_DELAY=1800     # ping après 30 min au lieu de 55
 export KEEPALIVE_MAX_PINGS=12   # si tu veux quand même un frein (~11 h)
+export KEEPALIVE_PROMPT="continue ce sur quoi tu travaillais"
 claude
 ```
+
+Le ping par défaut ne se contente pas de repousser le TTL : il demande à Claude de relire la
+mission de la session, de vérifier que les runs lancées tournent toujours, et — si la mission
+l'y autorise explicitement — d'enchaîner la run suivante en justifiant son choix. Il s'arrête
+de lui-même quand le budget ou le critère d'arrêt est atteint, ou après deux échecs
+consécutifs de même cause.
+
+`KEEPALIVE_PROMPT` le remplace par ce que tu veux. Le préfixe `[keepalive]` est ajouté d'office
+s'il manque : c'est à lui que le hook reconnaît ses propres pings, et ne pas le perdre est ce
+qui permet au compteur de rester juste.
+
+Chaque ping est complété d'un relevé pris à cet instant précis — charge CPU, RAM, disque, et
+sur machine NVIDIA le nombre de cartes libres et la VRAM. C'est ce qui permet de répondre
+« les ressources sont libres, j'enchaîne » sans deviner. `KEEPALIVE_STATS=0` le retire.
 
 Le compteur de pings repart à zéro dès que **tu** envoies un vrai message. Les prompts
 injectés par le système — typiquement la fin d'un subagent lancé en arrière-plan, que Claude
@@ -65,7 +86,7 @@ En cas de doute il ne fait rien — au pire le cache expire, ça ne coûte qu'un
 ### Développer
 
 ```bash
-bash plugins/keepalive/tests/run.sh   # 28 tests, tmux simulé, aucun coût
+bash plugins/keepalive/tests/run.sh   # 37 tests, tmux simulé, aucun coût
 ```
 
 Après toute modification, bumper la version dans `plugins/keepalive/.claude-plugin/plugin.json`

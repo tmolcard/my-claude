@@ -7,14 +7,17 @@ SCR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 export KEEPALIVE_STATE_DIR="$TMP/state"   # jamais l'état des sessions réelles
 STATE="$KEEPALIVE_STATE_DIR"
-PING="ping keepalive — réponds uniquement OK"
+PREFIX="[keepalive]"
 
 # ── stub tmux : capture-pane sert un pane simulé, le reste est journalisé
 mkdir -p "$TMP/bin"
 cat > "$TMP/bin/tmux" <<'STUB'
 #!/usr/bin/env bash
 if [ "$1" = "capture-pane" ]; then cat "${TMUX_STUB_PANE:-/dev/null}"; exit 0; fi
-echo "$@" >> "${TMUX_STUB_LOG:-/dev/null}"
+# load-buffer lit le texte sur stdin, paste-buffer le dépose dans le pane :
+# on journalise au collage, une ligne par ping.
+if [ "$1" = "load-buffer" ];  then cat > "${TMUX_STUB_LOG%.log}.buf"; exit 0; fi
+if [ "$1" = "paste-buffer" ]; then { cat "${TMUX_STUB_LOG%.log}.buf"; echo; } >> "${TMUX_STUB_LOG:-/dev/null}"; exit 0; fi
 STUB
 chmod +x "$TMP/bin/tmux"
 printf '\xe2\x9d\xaf \n'                                        > "$TMP/pane_idle"    # boîte vide
@@ -24,6 +27,7 @@ printf ' Do you want to proceed?\n \xe2\x9d\xaf 1. Yes\n   2. No\n' > "$TMP/pane
 
 export PATH="$TMP/bin:$PATH" TMUX_PANE="%99" TMUX_STUB_LOG="$TMP/tmux.log"
 export TMUX_STUB_PANE="$TMP/pane_idle" KEEPALIVE_DELAY=2
+export TMUX_STUB_LOG="$TMP/tmux.log"
 
 pass=0; fail=0
 ok(){ if [ "$2" = "$3" ]; then echo "  ✅ $1"; pass=$((pass+1));
@@ -31,7 +35,7 @@ ok(){ if [ "$2" = "$3" ]; then echo "  ✅ $1"; pass=$((pass+1));
 run(){ jq -nc --arg s "$3" --arg e "$1" --arg p "$2" \
        '{session_id:$s,hook_event_name:$e,prompt:$p}' | bash "$SCR/keepalive.sh"; }
 end(){ jq -nc --arg s "$1" '{session_id:$s,hook_event_name:"SessionEnd"}' | bash "$SCR/cleanup.sh"; }
-pings(){ grep -c 'send-keys' "$TMUX_STUB_LOG" 2>/dev/null | tr -d ' '; }
+pings(){ grep -c '\[keepalive\]' "$TMUX_STUB_LOG" 2>/dev/null | tr -d ' '; }
 armed(){ [ -f "$STATE/$1.pid" ] && echo oui || echo non; }
 clean(){ for f in "$STATE"/*.pid; do [ -f "$f" ] || continue
            P=$(cat "$f"); pkill -P "$P" 2>/dev/null; kill "$P" 2>/dev/null; done
@@ -51,14 +55,15 @@ S=t3-$$; clean; run Stop "" $S
 ok "Stop arme un timer" "$(armed $S)" "oui"
 sleep 3
 ok "un ping est parti" "$(pings)" "1"
-ok "contenu du ping" "$(cat "$TMUX_STUB_LOG")" "send-keys -t %99 $PING Enter"
+ok "le ping porte le préfixe de signature" "$(cut -c1-11 "$TMUX_STUB_LOG")" "$PREFIX"
+ok "le ping tient sur une seule ligne" "$(wc -l < "$TMUX_STUB_LOG" | tr -d ' ')" "1"
 S=t4-$$; clean; run Stop "" $S; sleep 0.5; run Stop "" $S; sleep 0.5; run Stop "" $S; sleep 3
 ok "3 hooks rapprochés => 1 seul ping" "$(pings)" "1"
 
 echo "── Compteur et plafond"
 S=t5-$$; clean
-run UserPromptSubmit "$PING" $S; ok "un ping incrémente" "$(cat "$STATE/$S.count")" "1"
-run UserPromptSubmit "$PING" $S; ok "puis incrémente encore" "$(cat "$STATE/$S.count")" "2"
+run UserPromptSubmit "$PREFIX blabla" $S; ok "un ping incrémente" "$(cat "$STATE/$S.count")" "1"
+run UserPromptSubmit "$PREFIX autre"  $S; ok "puis incrémente encore" "$(cat "$STATE/$S.count")" "2"
 run UserPromptSubmit "salut"  $S; ok "un prompt humain remet à zéro" "$(cat "$STATE/$S.count")" "0"
 # Un subagent qui se termine réinjecte un UserPromptSubmit : il ne doit pas
 # compter comme un retour humain.
@@ -107,6 +112,22 @@ S=t14b-$$; clean; mkdir -p "$STATE"; echo 99 > "$STATE/$S.count"
 KEEPALIVE_MAX_PINGS=0 run Stop "" $S
 ok "MAX=0 explicite : timer armé" "$(armed $S)" "oui"
 
+echo "── Prompt de ping personnalisé"
+S=t17-$$; clean; KEEPALIVE_STATS=0 KEEPALIVE_PROMPT="coucou le cache" run Stop "" $S; sleep 3
+ok "le préfixe est ajouté d'office s'il manque" "$(cat "$TMUX_STUB_LOG")" "$PREFIX coucou le cache"
+S=t18-$$; clean; KEEPALIVE_STATS=0 KEEPALIVE_PROMPT="$PREFIX déjà préfixé" run Stop "" $S; sleep 3
+ok "un préfixe déjà présent n'est pas doublé" "$(cat "$TMUX_STUB_LOG")" "$PREFIX déjà préfixé"
+S=t19-$$; clean; KEEPALIVE_STATS=0 KEEPALIVE_PROMPT="deux
+lignes" run Stop "" $S; sleep 3
+ok "retour à la ligne aplati (pas de validation à mi-chemin)" "$(cat "$TMUX_STUB_LOG")" "$PREFIX deux lignes"
+
+echo "── Instantané des ressources joint au ping"
+S=t20-$$; clean; KEEPALIVE_PROMPT="court" run Stop "" $S; sleep 3
+ok "les ressources sont jointes par défaut" "$(grep -c 'Ressources machine' "$TMUX_STUB_LOG")" "1"
+ok "et restent sur une seule ligne" "$(wc -l < "$TMUX_STUB_LOG" | tr -d ' ')" "1"
+S=t21-$$; clean; KEEPALIVE_STATS=0 KEEPALIVE_PROMPT="court" run Stop "" $S; sleep 3
+ok "KEEPALIVE_STATS=0 les omet" "$(grep -c 'Ressources machine' "$TMUX_STUB_LOG")" "0"
+
 echo "── Valeurs de config invalides"
 S=t15-$$; clean; KEEPALIVE_MAX_PINGS=abc run Stop "" $S
 ok "MAX non numérique : retombe sur le défaut (sans plafond)" "$(armed $S)" "oui"
@@ -114,6 +135,18 @@ S=t16-$$; clean; KEEPALIVE_DELAY=abc run Stop "" $S; sleep 3
 ok "DELAY non numérique : pas de ping immédiat parasite" "$(pings)" "0"
 ok "DELAY non numérique : timer quand même armé" "$(armed $S)" "oui"
 clean
+
+echo "── Prompt livré en collage bracketé"
+S=t22-$$; clean; echo 5 > "$STATE/$S.count"
+# Claude Code enveloppe un collage avant de le passer au hook : la signature
+# n'est plus en tête, le compteur doit quand même la retrouver.
+WRAPPED=$(printf '\n\n<pasted_content id="951b">\n%s ping' "$PREFIX")
+run UserPromptSubmit "$WRAPPED" $S
+ok "signature retrouvée sous l'enveloppe <pasted_content>" "$(cat "$STATE/$S.count")" "6"
+S=t23-$$; clean; echo 5 > "$STATE/$S.count"
+HUMAN=$(printf '\n\n<pasted_content id="7c2a">\nvoici mon fichier collé')
+run UserPromptSubmit "$HUMAN" $S
+ok "un vrai collage humain remet bien à zéro" "$(cat "$STATE/$S.count")" "0"
 
 echo "── Garde anti-réutilisation de PID"
 S=t13-$$; clean; mkdir -p "$STATE"
