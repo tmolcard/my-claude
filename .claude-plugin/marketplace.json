@@ -1,0 +1,17 @@
+{
+  "name": "my-claude",
+  "owner": {
+    "name": "tmolcard"
+  },
+  "metadata": {
+    "description": "Configuration Claude Code perso de tmolcard"
+  },
+  "plugins": [
+    {
+      "name": "keepalive",
+      "source": "./plugins/keepalive",
+      "description": "Maintient le cache prompt 1h : ping automatique apres 55 min d'inactivite (debounce via hooks, tmux requis)",
+      "version": "0.1.0"
+    }
+  ]
+}
