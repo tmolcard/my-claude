@@ -30,10 +30,23 @@ kill_timer() {
 # En cas de doute on s'abstient : au pire le cache expire, ce qui ne coûte
 # qu'une réécriture.
 pane_is_idle() {
-  local pane=$1 marker rest
-  marker=$(tmux capture-pane -p -t "$pane" 2>/dev/null | grep '❯' | tail -1) || return 1
+  local pane=$1 esc=$'\033' nbsp=$'\xc2\xa0' marker rest
+  marker=$(tmux capture-pane -e -p -t "$pane" 2>/dev/null | grep '❯' | tail -1) || return 1
   [ -n "$marker" ] || return 1          # boîte de saisie introuvable
-  rest=${marker#*❯}                      # ce qui suit le chevron : doit être vide
+  # Capture avec les couleurs (-e) : dans une boîte vide, Claude Code peut
+  # afficher une suggestion de prompt en faible intensité (SGR 2). Sans couleurs
+  # elle est indiscernable d'un brouillon et bloquait tous les pings. On retire
+  # les segments grisés, puis les autres séquences de couleur.
+  rest=$(printf '%s' "$marker" |
+         sed -E "s/${esc}\[([0-9;]*;)?2(;[0-9;]*)?m[^${esc}]*//g; s/${esc}\[[0-9;]*m//g")
+  # La boîte de saisie a son chevron en colonne 0 ; un dialogue (permission…)
+  # indente le sien (« ❯ 1. Yes »). Refus d'office, même si l'option est grisée.
+  case "$rest" in "❯"*) ;; *) return 1 ;; esac
+  rest=${rest#*❯}                      # ce qui suit le chevron : doit être vide
+  # Le chevron est suivi d'une espace insécable, que le `tr` GNU (Linux) ne
+  # compte pas dans [:space:], contrairement à celui de macOS : on la retire à
+  # la main, sinon une boîte vide passe pour occupée.
+  rest=${rest//$nbsp/}
   [ -z "$(printf '%s' "$rest" | tr -d '[:space:]')" ]
 }
 

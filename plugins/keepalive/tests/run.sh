@@ -24,6 +24,12 @@ printf '\xe2\x9d\xaf \n'                                        > "$TMP/pane_idl
 printf '\xe2\x9d\xaf un brouillon non envoye\n'                 > "$TMP/pane_draft"   # brouillon
 printf ' Do you want to proceed?\n \xe2\x9d\xaf 1. Yes\n   2. No\n' > "$TMP/pane_dialog" # permission
 :                                                               > "$TMP/pane_blank"   # illisible
+# Formes réelles relevées avec capture-pane -e : chevron suivi d'une espace
+# insécable, suggestion de prompt en faible intensité (SGR 2).
+printf '\033[39m\xe2\x9d\xaf\xc2\xa0\033[0m\n'                            > "$TMP/pane_nbsp"
+printf '\033[39m\xe2\x9d\xaf\xc2\xa0\033[2mOu en est le training ?\033[0m\n' > "$TMP/pane_suggest"
+printf '\033[39m\xe2\x9d\xaf\xc2\xa0un vrai brouillon\033[0m\n'           > "$TMP/pane_draft_c"
+printf ' \033[36m\xe2\x9d\xaf\033[0m \033[2m1. Yes\033[0m\n'                > "$TMP/pane_dialog_dim"
 
 export PATH="$TMP/bin:$PATH" TMUX_PANE="%99" TMUX_STUB_LOG="$TMP/tmux.log"
 export TMUX_STUB_PANE="$TMP/pane_idle" KEEPALIVE_DELAY=2
@@ -102,6 +108,14 @@ S=t11-$$; clean; TMUX_STUB_PANE="$TMP/pane_blank";  run Stop "" $S; sleep 3
 ok "pane illisible : pas de ping" "$(pings)" "0"
 S=t12-$$; clean; run Stop "" $S; sleep 3
 ok "pane au repos : ping envoyé" "$(pings)" "1"
+S=t12b-$$; clean; TMUX_STUB_PANE="$TMP/pane_nbsp";    run Stop "" $S; sleep 3
+ok "boîte vide avec espace insécable (Linux) : ping envoyé" "$(pings)" "1"
+S=t12c-$$; clean; TMUX_STUB_PANE="$TMP/pane_suggest"; run Stop "" $S; sleep 3
+ok "suggestion de prompt grisée : ping envoyé" "$(pings)" "1"
+S=t12d-$$; clean; TMUX_STUB_PANE="$TMP/pane_draft_c"; run Stop "" $S; sleep 3
+ok "brouillon en couleur normale : pas de ping" "$(pings)" "0"
+S=t12e-$$; clean; TMUX_STUB_PANE="$TMP/pane_dialog_dim"; run Stop "" $S; sleep 3
+ok "dialogue indenté, même grisé : pas de ping" "$(pings)" "0"
 
 echo "── Sans plafond (défaut)"
 S=t14-$$; clean; mkdir -p "$STATE"; echo 999 > "$STATE/$S.count"

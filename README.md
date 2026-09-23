@@ -86,7 +86,7 @@ En cas de doute il ne fait rien — au pire le cache expire, ça ne coûte qu'un
 ### Développer
 
 ```bash
-bash plugins/keepalive/tests/run.sh   # 37 tests, tmux simulé, aucun coût
+bash plugins/keepalive/tests/run.sh   # 41 tests, tmux simulé, aucun coût
 ```
 
 Après toute modification, bumper la version dans `plugins/keepalive/.claude-plugin/plugin.json`
