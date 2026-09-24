@@ -26,9 +26,8 @@ INPUT=$(cat)
 SESSION_ID=$(jq -r '.session_id // empty' <<<"$INPUT")
 EVENT=$(jq -r '.hook_event_name // empty' <<<"$INPUT")
 PROMPT=$(jq -r '.prompt // empty' <<<"$INPUT")
-[ -n "$SESSION_ID" ] || exit 0
-
-mkdir -p "$STATE_DIR" && chmod 700 "$STATE_DIR"
+valid_session_id "$SESSION_ID" || exit 0
+ensure_state_dir || exit 0
 S="$STATE_DIR/$SESSION_ID"
 PID_FILE=$S.pid CNT_FILE=$S.count DUE_FILE=$S.due LAST_FILE=$S.last
 OFF_FILE=$S.off DELAY_FILE=$S.delay MAX_FILE=$S.max STATS_FILE=$S.stats PROMPT_FILE=$S.prompt
@@ -118,7 +117,10 @@ date +%s > "$LAST_FILE"
 if [ "$EVENT" = "UserPromptSubmit" ]; then
   case "$(unwrap_prompt "$PROMPT")" in
     "$PREFIX"*)             # notre propre ping
-      echo $(( $(cat "$CNT_FILE" 2>/dev/null || echo 0) + 1 )) > "$CNT_FILE" ;;
+      # Contenu vérifié avant calcul : l'arithmétique bash évalue les indices
+      # de tableau, et donc exécuterait un `a[$(cmd)]` écrit dans le fichier.
+      N=$(cat "$CNT_FILE" 2>/dev/null); case "$N" in ''|*[!0-9]*) N=0 ;; esac
+      echo $(( N + 1 )) > "$CNT_FILE" ;;
     "<task-notification>"*) # prompt injecté par le système, pas par toi
       ;;
     *)                      # message humain

@@ -7,6 +7,24 @@
 # ne pas piétiner l'état des sessions réelles en cours.
 STATE_DIR="${KEEPALIVE_STATE_DIR:-/tmp/claude-keepalive-$(id -u)}"
 
+# Le répertoire d'état doit être à nous, fermé, et pas un lien symbolique. Sous
+# /tmp, un autre utilisateur de la machine peut le créer avant nous (le nom est
+# prévisible) : il pourrait alors y déposer un faux .prompt, que le timer
+# injecterait dans notre session comme une consigne, ou des liens symboliques
+# vers nos fichiers. mkdir -p ne dit rien si le dossier existe déjà, d'où la
+# vérification après coup ; en cas de doute on ne fait rien.
+ensure_state_dir() {
+  mkdir -p -m 700 "$STATE_DIR" 2>/dev/null
+  [ -d "$STATE_DIR" ] && [ ! -L "$STATE_DIR" ] && [ -O "$STATE_DIR" ] || return 1
+  chmod 700 "$STATE_DIR" 2>/dev/null
+}
+
+# L'identifiant de session sert de nom de fichier : on refuse tout ce qui
+# pourrait sortir du répertoire d'état (/, ..).
+valid_session_id() {
+  case "$1" in ''|*[!A-Za-z0-9_-]*) return 1 ;; esac
+}
+
 # Tue le timer d'une session : d'abord le `sleep` enfant (sinon il survit à son
 # parent et s'accumule à chaque hook), puis le sous-shell lui-même.
 # Garde anti-réutilisation de PID : un fichier .pid périmé (session tuée sans

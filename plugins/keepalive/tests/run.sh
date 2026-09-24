@@ -225,6 +225,20 @@ ok "reset efface les réglages de session" "$(ls "$STATE" | grep -cE "^$S\.(off|
 ok "reset réarme" "$(armed $S)" "oui"
 clean
 
+echo "── Sécurité de l'état"
+S=s1-$$; clean
+mkdir -p "$TMP/ailleurs"; ln -s "$TMP/ailleurs" "$TMP/lien"
+jq -nc --arg s "$S" '{session_id:$s,hook_event_name:"Stop"}' | KEEPALIVE_STATE_DIR="$TMP/lien" bash "$SCR/keepalive.sh"
+ok "répertoire d'état en lien symbolique : refusé" "$(ls "$TMP/ailleurs" | wc -l | tr -d ' ')" "0"
+run Stop "" "../evasion"
+ok "session_id avec ../ : refusé" "$([ -e "$TMP/evasion.pid" ] && echo écrit || echo refusé)" "refusé"
+S=s2-$$; clean; mkdir -p "$STATE"
+printf 'a[$(touch %s)]' "$TMP/pwned" > "$STATE/$S.count"
+run UserPromptSubmit "$PREFIX ping" $S
+ok "compteur piégé : pas d'exécution de code" "$([ -e "$TMP/pwned" ] && echo exécuté || echo inerte)" "inerte"
+ok "… et repart de 0" "$(cat "$STATE/$S.count")" "1"
+clean
+
 echo "── Garde anti-réutilisation de PID"
 S=t13-$$; clean; mkdir -p "$STATE"
 sleep 300 & victime=$!; echo $victime > "$STATE/$S.pid"   # .pid périmé pointant un tiers
