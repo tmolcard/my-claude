@@ -45,7 +45,7 @@ pings(){ grep -c '\[keepalive\]' "$TMUX_STUB_LOG" 2>/dev/null | tr -d ' '; }
 armed(){ [ -f "$STATE/$1.pid" ] && echo oui || echo non; }
 clean(){ for f in "$STATE"/*.pid; do [ -f "$f" ] || continue
            P=$(cat "$f"); pkill -P "$P" 2>/dev/null; kill "$P" 2>/dev/null; done
-         rm -f "$STATE"/*.pid "$STATE"/*.count; sleep 0.2
+         rm -f "$STATE"/*; sleep 0.2
          : > "$TMUX_STUB_LOG"; TMUX_STUB_PANE="$TMP/pane_idle"; }
 
 echo "── Conditions d'activation"
@@ -161,6 +161,69 @@ S=t23-$$; clean; echo 5 > "$STATE/$S.count"
 HUMAN=$(printf '\n\n<pasted_content id="7c2a">\nvoici mon fichier collé')
 run UserPromptSubmit "$HUMAN" $S
 ok "un vrai collage humain remet bien à zéro" "$(cat "$STATE/$S.count")" "0"
+
+echo "── Commande /keepalive (interceptée, jamais transmise au modèle)"
+cmd(){ run UserPromptSubmit "/keepalive $1" "${2:-$S}"; }
+reason(){ jq -r '.reason // empty'; }
+S=c1-$$; clean; mkdir -p "$STATE"; echo 4 > "$STATE/$S.count"
+OUT=$(cmd status)
+ok "status : prompt bloqué" "$(jq -r .decision <<<"$OUT")" "block"
+ok "status : décrit l'état" "$(reason <<<"$OUT" | grep -c '^keepalive : ')" "1"
+ok "une commande ne touche pas au compteur" "$(cat "$STATE/$S.count")" "4"
+ok "une commande n'arme pas de timer" "$(armed $S)" "non"
+OUT=$(run UserPromptSubmit "/keepalive:keepalive status" $S)
+ok "forme longue /keepalive:keepalive reconnue" "$(jq -r .decision <<<"$OUT")" "block"
+OUT=$(run UserPromptSubmit "/keepalivex" $S)
+ok "/keepalivex n'est pas notre commande" "$OUT" ""
+ok "… et compte comme message humain" "$(cat "$STATE/$S.count")" "0"
+OUT=$(cmd blabla)
+ok "sous-commande inconnue signalée" "$(reason <<<"$OUT" | grep -c inconnue)" "1"
+OUT=$(jq -nc --arg s "$S" '{session_id:$s,hook_event_name:"UserPromptSubmit",prompt:"/keepalive"}' | env -u TMUX_PANE bash "$SCR/keepalive.sh")
+ok "hors tmux : la commande répond quand même" "$(reason <<<"$OUT" | grep -c 'pas dans tmux')" "1"
+
+S=c2-$$; clean; run Stop "" $S; cmd off >/dev/null
+ok "off : timer tué" "$(armed $S)" "non"
+sleep 3; ok "off : aucun ping" "$(pings)" "0"
+run Stop "" $S; ok "off : l'activité suivante ne réarme pas" "$(armed $S)" "non"
+ok "off : status le dit" "$(cmd status | reason | grep -c 'coupé')" "1"
+end $S; ok "off survit à SessionEnd (--resume garde l'id)" "$([ -f "$STATE/$S.off" ] && echo oui || echo non)" "oui"
+run Stop "" $S; ok "… et reste coupé après reprise" "$(armed $S)" "non"
+echo 3 > "$STATE/$S.count"; cmd on >/dev/null
+ok "on : timer réarmé" "$(armed $S)" "oui"
+ok "on : compteur remis à zéro" "$(cat "$STATE/$S.count")" "0"
+sleep 3.5; ok "on : le ping repart" "$(pings)" "1"
+
+S=c3-$$; clean; KEEPALIVE_DELAY=600 run Stop "" $S
+KEEPALIVE_DELAY=600 cmd now >/dev/null; sleep 4
+ok "now : ping immédiat malgré un délai de 10 min" "$(pings)" "1"
+S=c3b-$$; clean; KEEPALIVE_DELAY=600 run Stop "" $S; cmd off >/dev/null; cmd now >/dev/null; sleep 4
+ok "now refusé quand coupé" "$(pings)" "0"
+
+S=c4-$$; clean; KEEPALIVE_DELAY=600 run Stop "" $S
+KEEPALIVE_DELAY=600 cmd "delay 30m" >/dev/null
+ok "delay 30m enregistré en secondes" "$(cat "$STATE/$S.delay")" "1800"
+KEEPALIVE_DELAY=600 cmd "delay 1h30" >/dev/null; ok "delay 1h30" "$(cat "$STATE/$S.delay")" "5400"
+OUT=$(KEEPALIVE_DELAY=600 cmd "delay 1h30"); ok "délai > 1 h : avertissement TTL" "$(reason <<<"$OUT" | grep -c 'aura expiré')" "1"
+OUT=$(cmd "delay abc"); ok "durée invalide refusée" "$(reason <<<"$OUT" | grep -c 'non comprise')" "1"
+ok "… sans écraser le réglage" "$(cat "$STATE/$S.delay")" "5400"
+KEEPALIVE_DELAY=600 cmd "delay 10s" >/dev/null
+due=$(( $(cat "$STATE/$S.due") - $(date +%s) ))
+ok "delay réarme calé sur la dernière activité" "$([ "$due" -le 10 ] && echo oui || echo non)" "oui"
+sleep 11; ok "… et le ping part à la nouvelle échéance" "$(pings)" "1"
+cmd "delay reset" >/dev/null; ok "delay reset" "$([ -f "$STATE/$S.delay" ] && echo oui || echo non)" "non"
+
+S=c5-$$; clean; KEEPALIVE_STATS=0 run Stop "" $S; KEEPALIVE_STATS=0 cmd "prompt coucou session" >/dev/null; sleep 3
+ok "prompt de session appliqué au ping déjà armé" "$(cat "$TMUX_STUB_LOG")" "$PREFIX coucou session"
+S=c6-$$; clean; KEEPALIVE_PROMPT=court run Stop "" $S; cmd "stats off" >/dev/null; sleep 3
+ok "stats off appliqué au ping déjà armé" "$(grep -c 'Ressources machine' "$TMUX_STUB_LOG")" "0"
+S=c7-$$; clean; mkdir -p "$STATE"; echo 2 > "$STATE/$S.count"; run Stop "" $S; cmd "max 2" >/dev/null
+ok "max 2 avec 2 pings déjà faits : timer coupé" "$(armed $S)" "non"
+ok "… et status explique la pause" "$(cmd status | reason | grep -c 'plafond de 2')" "1"
+cmd "max 0" >/dev/null; ok "max 0 : sans limite, réarmé" "$(armed $S)" "oui"
+cmd off >/dev/null; cmd "delay 5m" >/dev/null; cmd reset >/dev/null
+ok "reset efface les réglages de session" "$(ls "$STATE" | grep -cE "^$S\.(off|delay|max)$")" "0"
+ok "reset réarme" "$(armed $S)" "oui"
+clean
 
 echo "── Garde anti-réutilisation de PID"
 S=t13-$$; clean; mkdir -p "$STATE"

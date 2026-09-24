@@ -38,7 +38,30 @@ suivant : tu fermes la session quand tu veux, le plugin ne décide jamais d'arr�
 Une seule chose à savoir : **une session déjà ouverte ne le prend pas.** Les hooks sont lus
 au démarrage, donc il faut relancer `claude` (`claude --continue` reprend la conversation).
 
-### Régler
+### Piloter une session en cours : `/keepalive`
+
+Tape la commande dans la session elle-même. Elle est traitée par le plugin et n'est jamais
+envoyée au modèle : aucun token dépensé.
+
+| Commande                          | Effet                                                        |
+|-----------------------------------|--------------------------------------------------------------|
+| `/keepalive`                      | État : actif ou coupé, prochain ping, réglages               |
+| `/keepalive off` / `on`           | Coupe les pings de cette session / les relance               |
+| `/keepalive now`                  | Envoie un ping tout de suite                                 |
+| `/keepalive delay 30m`            | Change le délai (`90s`, `30m`, `1h30`) ; `delay reset` revient au défaut |
+| `/keepalive prompt <texte>`       | Change le texte du ping ; `prompt reset` remet le prompt de mission |
+| `/keepalive stats on`/`off`       | Joint ou non le relevé machine                               |
+| `/keepalive max 12`               | Plafond de pings d'affilée (`0` = sans limite)               |
+| `/keepalive reset`                | Efface tous les réglages de la session                       |
+
+Ces réglages ne valent que pour la session où tu les tapes, et priment sur les variables
+d'environnement ci-dessous. Ils survivent à `claude --resume` : une session coupée reste
+coupée après un redémarrage.
+
+Un changement de délai compte depuis ta dernière activité : passer à 30 min après 40 min de
+silence déclenche le ping tout de suite.
+
+### Régler par défaut
 
 Variables d'environnement, à exporter avant de lancer `claude` :
 
@@ -86,7 +109,7 @@ En cas de doute il ne fait rien — au pire le cache expire, ça ne coûte qu'un
 ### Développer
 
 ```bash
-bash plugins/keepalive/tests/run.sh   # 41 tests, tmux simulé, aucun coût
+bash plugins/keepalive/tests/run.sh   # 76 tests, tmux simulé, aucun coût
 ```
 
 Après toute modification, bumper la version dans `plugins/keepalive/.claude-plugin/plugin.json`
