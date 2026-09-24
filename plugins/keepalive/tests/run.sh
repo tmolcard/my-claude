@@ -162,7 +162,8 @@ HUMAN=$(printf '\n\n<pasted_content id="7c2a">\nvoici mon fichier collé')
 run UserPromptSubmit "$HUMAN" $S
 ok "un vrai collage humain remet bien à zéro" "$(cat "$STATE/$S.count")" "0"
 
-echo "── Commande /keepalive (interceptée, jamais transmise au modèle)"
+echo "── Commande /keepalive, mode silencieux (KEEPALIVE_QUIET=1 : bloquée, jamais transmise au modèle)"
+export KEEPALIVE_QUIET=1
 cmd(){ run UserPromptSubmit "/keepalive $1" "${2:-$S}"; }
 reason(){ jq -r '.reason // empty'; }
 S=c1-$$; clean; mkdir -p "$STATE"; echo 4 > "$STATE/$S.count"
@@ -223,6 +224,30 @@ cmd "max 0" >/dev/null; ok "max 0 : sans limite, réarmé" "$(armed $S)" "oui"
 cmd off >/dev/null; cmd "delay 5m" >/dev/null; cmd reset >/dev/null
 ok "reset efface les réglages de session" "$(ls "$STATE" | grep -cE "^$S\.(off|delay|max)$")" "0"
 ok "reset réarme" "$(armed $S)" "oui"
+clean
+unset KEEPALIVE_QUIET
+
+echo "── Commande /keepalive, mode visible (défaut : résultat transmis au modèle, visible dans l'app)"
+ctx(){ jq -r '.hookSpecificOutput.additionalContext // empty'; }
+S=v1-$$; clean; mkdir -p "$STATE"; echo 4 > "$STATE/$S.count"
+OUT=$(cmd status)
+ok "status : le prompt n'est pas bloqué" "$(jq -r '.decision // "passe"' <<<"$OUT")" "passe"
+ok "status : résultat en contexte additionnel" "$(ctx <<<"$OUT" | head -1 | cut -c1-37)" "[keepalive-résultat] **keepalive** · "
+ok "status : annonce l'échéance après la réponse" "$(ctx <<<"$OUT" | grep -c 'après cette réponse')" "1"
+ok "compteur inchangé" "$(cat "$STATE/$S.count")" "4"
+OUT=$(cmd off); ok "off : confirmé en contexte" "$(ctx <<<"$OUT" | grep -c 'coupé')" "1"
+ok "off : appliqué par le hook" "$([ -f "$STATE/$S.off" ] && echo oui || echo non)" "oui"
+run Stop "" $S; ok "off : la fin du tour de réponse ne réarme pas" "$(armed $S)" "non"
+S=v2-$$; clean; KEEPALIVE_DELAY=600 run Stop "" $S
+OUT=$(KEEPALIVE_DELAY=600 cmd now)
+ok "now : annoncé après la réponse" "$(ctx <<<"$OUT" | grep -c 'après cette réponse')" "1"
+sleep 4; ok "now : rien pendant la réponse du modèle" "$(pings)" "0"
+KEEPALIVE_DELAY=600 run Stop "" $S; sleep 4
+ok "now : ping 3 s après la fin du tour" "$(pings)" "1"
+ok "now : marqueur consommé" "$([ -f "$STATE/$S.now" ] && echo oui || echo non)" "non"
+KEEPALIVE_DELAY=600 run Stop "" $S
+due=$(( $(cat "$STATE/$S.due") - $(date +%s) ))
+ok "tour suivant : retour au délai normal" "$([ "$due" -gt 500 ] && echo oui || echo non)" "oui"
 clean
 
 echo "── Sécurité de l'état"

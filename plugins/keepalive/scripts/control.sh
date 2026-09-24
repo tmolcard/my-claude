@@ -2,12 +2,29 @@
 # Commande /keepalive, sourcée par keepalive.sh qui a déjà lu l'entrée du hook et
 # posé les chemins d'état de la session.
 #
-# La réponse sort en {"decision":"block","reason":…} : Claude Code affiche la
-# raison et abandonne le prompt, qui n'atteint donc jamais le modèle.
+# La commande est toujours exécutée ici, par le hook : le modèle ne décide de
+# rien. Reste à afficher le résultat, de deux façons :
+#  - par défaut, le prompt passe avec le résultat en contexte additionnel, et le
+#    modèle le recopie (voir SKILL.md). Ça coûte un tour, mais c'est la seule
+#    voie visible depuis l'app desktop ou mobile (Remote Control) : elle n'affiche
+#    que la conversation, pas la sortie d'un hook.
+#  - KEEPALIVE_QUIET=1 : le prompt est bloqué ({"decision":"block"}), gratuit,
+#    mais la raison ne s'affiche que dans le terminal.
+QUIET=0; [ "${KEEPALIVE_QUIET:-0}" = "1" ] && QUIET=1
 
 HELP="Commandes : /keepalive [status] · on · off · now · delay 30m|1h|reset · prompt <texte>|reset · stats on|off|reset · max <N>|reset (0 = sans limite) · reset"
 
-reply() { jq -n --arg r "$1" '{decision:"block",reason:$r}'; }
+reply() {
+  if [ "$QUIET" = "1" ]; then
+    jq -n --arg r "$1" '{decision:"block",reason:$r}'
+  else
+    local msg=$1
+    # Titre en gras pour les réponses courtes ; status a déjà le sien.
+    case "$msg" in "**keepalive**"*) ;; keepalive*) msg="**keepalive**${msg#keepalive}" ;; *) msg="**keepalive** · $msg" ;; esac
+    jq -n --arg c "[keepalive-résultat] $msg" \
+      '{hookSpecificOutput:{hookEventName:"UserPromptSubmit",additionalContext:$c}}'
+  fi
+}
 
 # « 55 min », « 1 h 30 », « 45 s »
 fmt_dur() {
@@ -60,6 +77,11 @@ state_line() {
     echo "inactif : cette session ne tourne pas dans tmux"
   elif [ -f "$OFF_FILE" ]; then
     echo "coupé pour cette session (/keepalive on pour reprendre)"
+  elif [ "$QUIET" = "0" ] && ! cap_reached; then
+    # Le tour que la commande déclenche rafraîchit le cache : c'est sa fin (Stop)
+    # qui fixera la vraie échéance, pas le timer en cours.
+    local wait=$DELAY; [ -f "$NOW_FILE" ] && wait=3
+    echo "actif · prochain ping $(fmt_dur "$wait") après cette réponse (vers $(clock $(( $(date +%s) + wait ))))"
   elif timer_alive; then
     now=$(date +%s); due=$(cat "$DUE_FILE" 2>/dev/null)
     case "$due" in ''|*[!0-9]*) echo "actif · timer armé" ;;
@@ -88,6 +110,18 @@ status_text() {
     prompt_txt="« ${PROMPT_MSG:0:160}$([ ${#PROMPT_MSG} -gt 160 ] && echo …) »$(src "$PROMPT_FILE" "${KEEPALIVE_PROMPT:-}")"
   else
     prompt_txt="par défaut (relecture de la mission, cas 1/2/3)"
+  fi
+  if [ "$QUIET" = "0" ]; then
+    # Markdown : recopié par le modèle, il est rendu proprement dans l'app comme
+    # dans le terminal. Les | du prompt casseraient le tableau.
+    printf '**keepalive** · %s\n\n| Réglage | Valeur |\n|---|---|\n| Délai | %s%s |\n| Plafond | %s%s |\n| Stats machine | %s%s |\n| Pings d%saffilée | %s |\n| Prompt | %s |\n\n%s' \
+      "$(state_line)" \
+      "$(fmt_dur "$DELAY")" "$(src "$DELAY_FILE" "${KEEPALIVE_DELAY:-}")" \
+      "$max_txt" "$(src "$MAX_FILE" "${KEEPALIVE_MAX_PINGS:-}")" \
+      "$stats_txt" "$(src "$STATS_FILE" "${KEEPALIVE_STATS:-}")" \
+      "'" "$count" "${prompt_txt//|/\\|}" \
+      "\`/keepalive on | off | now | delay 30m | prompt … | stats on/off | max N | reset\`"
+    return
   fi
   printf 'keepalive : %s\ndélai %s%s · plafond %s%s · stats %s%s · pings d%saffilée %s\nprompt : %s\n%s' \
     "$(state_line)" \
@@ -122,7 +156,10 @@ handle_command() {
 
     now)
       if ! can_arm || [ -f "$OFF_FILE" ]; then reply "keepalive : $(state_line)"
-      else arm_timer 3; reply "keepalive : ping dans 3 s."; fi ;;
+      elif [ "$QUIET" = "1" ]; then arm_timer 3; reply "keepalive : ping dans 3 s."
+      # Un timer de 3 s tomberait pendant la réponse du modèle et serait sauté :
+      # on laisse le Stop de fin de tour l'armer, via ce marqueur.
+      else touch "$NOW_FILE"; reply "keepalive : ping 3 s après cette réponse."; fi ;;
 
     delay)
       case "$rest" in

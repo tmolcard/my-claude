@@ -1,6 +1,6 @@
 {
   "name": "keepalive",
-  "version": "0.10.1",
+  "version": "0.10.2",
   "description": "Maintient le cache prompt 1h : ping automatique apres 55 min d'inactivite (debounce via hooks, tmux requis)",
   "author": {
     "name": "tmolcard"

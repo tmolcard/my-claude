@@ -40,8 +40,14 @@ au démarrage, donc il faut relancer `claude` (`claude --continue` reprend la co
 
 ### Piloter une session en cours : `/keepalive`
 
-Tape la commande dans la session elle-même. Elle est traitée par le plugin et n'est jamais
-envoyée au modèle : aucun token dépensé.
+Tape la commande dans la session elle-même, depuis le terminal ou depuis l'app desktop ou
+mobile. C'est le plugin qui l'exécute ; Claude se contente de recopier le résultat, sous forme
+d'un petit tableau. Ça coûte un tour de modèle, à peu près le prix d'un ping, mais c'est la
+seule façon de voir la réponse depuis l'app. `KEEPALIVE_QUIET=1` supprime ce tour : la réponse
+ne s'affiche alors que dans le terminal, sans rien coûter.
+
+Dans l'app, les commandes de plugin n'apparaissent pas dans la liste `/` : tape
+`/keepalive status` en entier.
 
 | Commande                          | Effet                                                        |
 |-----------------------------------|--------------------------------------------------------------|
@@ -72,6 +78,7 @@ Variables d'environnement, à exporter avant de lancer `claude` :
 | `KEEPALIVE_PROMPT`    | voir ci-dessous | Le texte envoyé comme ping                   |
 | `KEEPALIVE_STATS`     | 1      | Joint un relevé CPU/RAM/disque/GPU au ping ; `0` l'omet |
 | `KEEPALIVE_DISABLE`   | 0      | `1` pour désactiver sans désinstaller                  |
+| `KEEPALIVE_QUIET`     | 0      | `1` : `/keepalive` répond dans le terminal seulement, sans tour de modèle |
 
 ```bash
 export KEEPALIVE_DELAY=1800     # ping après 30 min au lieu de 55
@@ -109,7 +116,7 @@ En cas de doute il ne fait rien — au pire le cache expire, ça ne coûte qu'un
 ### Développer
 
 ```bash
-bash plugins/keepalive/tests/run.sh   # 80 tests, tmux simulé, aucun coût
+bash plugins/keepalive/tests/run.sh   # 92 tests, tmux simulé, aucun coût
 ```
 
 Après toute modification, bumper la version dans `plugins/keepalive/.claude-plugin/plugin.json`

@@ -7,5 +7,5 @@
 SESSION_ID=$(jq -r '.session_id // empty')
 valid_session_id "$SESSION_ID" && ensure_state_dir || exit 0
 kill_timer "$STATE_DIR/$SESSION_ID.pid"
-rm -f "$STATE_DIR/$SESSION_ID".{pid,count,due,last}
+rm -f "$STATE_DIR/$SESSION_ID".{pid,count,due,last,now}
 exit 0

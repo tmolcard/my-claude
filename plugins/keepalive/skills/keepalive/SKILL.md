@@ -5,9 +5,16 @@ argument-hint: "[status|on|off|now|delay 30m|prompt <texte>|stats on|off|max N|r
 disable-model-invocation: true
 ---
 
-Cette commande est normalement interceptée par le hook du plugin keepalive avant de
-t'atteindre. Si tu lis ce texte, le hook n'est pas actif dans cette session.
+Le hook du plugin keepalive a déjà exécuté cette commande. Son résultat t'a été
+transmis en contexte additionnel, dans un bloc qui commence par `[keepalive-résultat]`.
 
-Dis-le à l'utilisateur en une ou deux lignes, sans rien exécuter d'autre. Causes
-probables : la session a été lancée avant l'installation ou la mise à jour du plugin
-(relancer `claude --continue`), ou `jq` est absent de la machine.
+Ta réponse entière est ce résultat, recopié tel quel, sans le préfixe
+`[keepalive-résultat]`. N'ajoute ni commentaire, ni résumé, ni question, et
+n'exécute aucun outil : la commande est déjà faite, tu ne sers qu'à afficher son
+résultat à l'utilisateur, qui peut te lire depuis une app où la sortie des hooks
+n'apparaît pas.
+
+Si aucun bloc `[keepalive-résultat]` n'est présent, le hook n'est pas actif dans
+cette session : dis-le en une ligne, sans rien exécuter. Causes probables : session
+lancée avant l'installation ou la mise à jour du plugin (relancer `claude --continue`),
+ou `jq` absent de la machine.

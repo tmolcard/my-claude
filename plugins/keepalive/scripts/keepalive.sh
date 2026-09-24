@@ -9,6 +9,9 @@
 #   KEEPALIVE_PROMPT     texte du ping ; le préfixe [keepalive] est ajouté s'il manque
 #   KEEPALIVE_STATS      1 (défaut) joint un instantané CPU/RAM/disque/GPU au ping, 0 l'omet
 #   KEEPALIVE_DISABLE=1  désactive complètement
+#   KEEPALIVE_QUIET=1    /keepalive répond dans le terminal seulement, sans tour de
+#                        modèle (par défaut la réponse passe par la conversation,
+#                        seule façon de la voir depuis l'app desktop ou mobile)
 #
 # Réglages par session : la commande /keepalive (voir control.sh) les écrit dans
 # le répertoire d'état, où ils priment sur les variables d'env.
@@ -30,7 +33,7 @@ valid_session_id "$SESSION_ID" || exit 0
 ensure_state_dir || exit 0
 S="$STATE_DIR/$SESSION_ID"
 PID_FILE=$S.pid CNT_FILE=$S.count DUE_FILE=$S.due LAST_FILE=$S.last
-OFF_FILE=$S.off DELAY_FILE=$S.delay MAX_FILE=$S.max STATS_FILE=$S.stats PROMPT_FILE=$S.prompt
+NOW_FILE=$S.now OFF_FILE=$S.off DELAY_FILE=$S.delay MAX_FILE=$S.max STATS_FILE=$S.stats PROMPT_FILE=$S.prompt
 
 # Config effective : variables d'env, puis surcharges de la session. Relue aussi
 # par le timer au moment du ping, pour qu'un /keepalive prompt ou stats tapé
@@ -140,5 +143,11 @@ rm -f "$PID_FILE" "$DUE_FILE"
 # plafond atteint d'emblée et ne pingerait jamais.
 cap_reached && exit 0
 
+# /keepalive now en mode visible : le ping part juste après la réponse du modèle.
+if [ "$EVENT" = "Stop" ] && [ -f "$NOW_FILE" ]; then
+  rm -f "$NOW_FILE"
+  arm_timer 3
+  exit 0
+fi
 arm_timer "$DELAY"
 exit 0
