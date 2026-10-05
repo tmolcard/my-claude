@@ -1,7 +1,7 @@
 ---
 name: keepalive
-description: Piloter le keepalive de cette session (on, off, status, now, delay, prompt, stats, max, reset).
-argument-hint: "[status|on|off|now|delay 30m|prompt <texte>|stats on|off|max N|reset]"
+description: Piloter le keepalive de cette session (status, on, off, now, warmup, monitoring, delay, prompt, stats, max, reset).
+argument-hint: "[status|on|off|now|warmup|monitoring|delay 30m|prompt <texte>|stats on|off|max N|reset]"
 disable-model-invocation: true
 ---
 

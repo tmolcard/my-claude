@@ -54,8 +54,9 @@ Dans l'app, les commandes de plugin n'apparaissent pas dans la liste `/` : tape
 | `/keepalive`                      | État : actif ou coupé, prochain ping, réglages               |
 | `/keepalive off` / `on`           | Coupe les pings de cette session / les relance               |
 | `/keepalive now`                  | Envoie un ping tout de suite                                 |
+| `/keepalive warmup` / `monitoring` | Choisit l'état du ping : réchauffage seul, ou mission + relevé machine (`mode reset` revient au défaut) |
 | `/keepalive delay 30m`            | Change le délai (`90s`, `30m`, `1h30`) ; `delay reset` revient au défaut |
-| `/keepalive prompt <texte>`       | Change le texte du ping ; `prompt reset` remet le prompt de mission |
+| `/keepalive prompt <texte>`       | Change le texte du ping ; `prompt reset` remet celui du mode |
 | `/keepalive stats on`/`off`       | Joint ou non le relevé machine                               |
 | `/keepalive max 12`               | Plafond de pings d'affilée (`0` = sans limite)               |
 | `/keepalive reset`                | Efface tous les réglages de la session                       |
@@ -75,31 +76,46 @@ Variables d'environnement, à exporter avant de lancer `claude` :
 |-----------------------|--------|-------------------------------------------------------|
 | `KEEPALIVE_DELAY`     | 3300   | Secondes d'inactivité avant le ping (3300 = 55 min)   |
 | `KEEPALIVE_MAX_PINGS` | 0      | `0` = sans limite. Un nombre = s'arrête après N pings d'affilée |
-| `KEEPALIVE_PROMPT`    | voir ci-dessous | Le texte envoyé comme ping                   |
-| `KEEPALIVE_STATS`     | 1      | Joint un relevé CPU/RAM/disque/GPU au ping ; `0` l'omet |
+| `KEEPALIVE_MODE`      | warmup | `warmup` : le ping ne fait que réchauffer le cache ; `monitoring` : mission + relevé machine |
+| `KEEPALIVE_PROMPT`    | selon le mode | Le texte envoyé comme ping, remplace celui du mode |
+| `KEEPALIVE_STATS`     | selon le mode | Joint un relevé CPU/RAM/disque/GPU au ping (`1`) ou non (`0`) ; sans valeur : `1` en monitoring, `0` en warmup |
 | `KEEPALIVE_DISABLE`   | 0      | `1` pour désactiver sans désinstaller                  |
 | `KEEPALIVE_QUIET`     | 0      | `1` : `/keepalive` répond dans le terminal seulement, sans tour de modèle |
 
 ```bash
 export KEEPALIVE_DELAY=1800     # ping après 30 min au lieu de 55
 export KEEPALIVE_MAX_PINGS=12   # si tu veux quand même un frein (~11 h)
-export KEEPALIVE_PROMPT="continue ce sur quoi tu travaillais"
+export KEEPALIVE_MODE=monitoring  # sessions qui pilotent des runs
 claude
 ```
 
-Le ping par défaut ne se contente pas de repousser le TTL : il demande à Claude de relire la
-mission de la session, de vérifier que les runs lancées tournent toujours, et — si la mission
-l'y autorise explicitement — d'enchaîner la run suivante en justifiant son choix. Il s'arrête
-de lui-même quand le budget ou le critère d'arrêt est atteint, ou après deux échecs
-consécutifs de même cause.
+### Deux états : `warmup` et `monitoring`
 
-`KEEPALIVE_PROMPT` le remplace par ce que tu veux. Le préfixe `[keepalive]` est ajouté d'office
+**`warmup`** (défaut) : le ping dit « Réchauffage du cache uniquement. Réponds exactement
+"OK", sans outil, sans vérification, sans commentaire. » Un seul appel API, qui ne coûte que
+la lecture du cache. C'est ce qu'il faut pour une session de réflexion ou de conception, où
+personne n'attend qu'elle agisse seule.
+
+**`monitoring`** : le ping demande à Claude de relire la mission de la session, de vérifier
+que les runs lancées tournent toujours, et — si la mission l'y autorise explicitement —
+d'enchaîner la run suivante en justifiant son choix. Il s'arrête de lui-même quand le budget
+ou le critère d'arrêt est atteint, ou après deux échecs consécutifs de même cause. Le relevé
+machine est joint. C'est l'état des sessions qui pilotent des entraînements ou des
+recherches d'hyperparamètres.
+
+Pourquoi deux états : mesuré sur 212 pings (28 sessions, octobre 2026), le prompt de mission
+coûtait 3 appels API par ping en médiane, jamais un simple « OK », soit 70 % du coût total du
+keepalive, pour le même nombre de caches sauvés qu'un ping de réchauffage. Les deux états
+font le même travail de cache ; seul `monitoring` fait aussi du travail de mission.
+
+`KEEPALIVE_PROMPT` ou `/keepalive prompt` remplace le texte du mode par ce que tu veux. Le préfixe `[keepalive]` est ajouté d'office
 s'il manque : c'est à lui que le hook reconnaît ses propres pings, et ne pas le perdre est ce
 qui permet au compteur de rester juste.
 
-Chaque ping est complété d'un relevé pris à cet instant précis — charge CPU, RAM, disque, et
+Le relevé machine est pris à l'instant du ping — charge CPU, RAM, disque, et
 sur machine NVIDIA le nombre de cartes libres et la VRAM. C'est ce qui permet de répondre
-« les ressources sont libres, j'enchaîne » sans deviner. `KEEPALIVE_STATS=0` le retire.
+« les ressources sont libres, j'enchaîne » sans deviner. Il est joint en `monitoring`, omis en
+`warmup` ; `KEEPALIVE_STATS` ou `/keepalive stats` tranche explicitement.
 
 Le compteur de pings repart à zéro dès que **tu** envoies un vrai message. Les prompts
 injectés par le système — typiquement la fin d'un subagent lancé en arrière-plan, que Claude
@@ -116,7 +132,7 @@ En cas de doute il ne fait rien — au pire le cache expire, ça ne coûte qu'un
 ### Développer
 
 ```bash
-bash plugins/keepalive/tests/run.sh   # 92 tests, tmux simulé, aucun coût
+bash plugins/keepalive/tests/run.sh   # 116 tests, tmux simulé, aucun coût
 ```
 
 Après toute modification, bumper la version dans `plugins/keepalive/.claude-plugin/plugin.json`

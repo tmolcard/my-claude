@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SessionEnd : tue le timer keepalive de la session et nettoie son état d'exécution.
-# Les réglages posés par /keepalive (off, delay, prompt, stats, max) sont gardés :
+# Les réglages posés par /keepalive (off, mode, delay, prompt, stats, max) sont gardés :
 # `claude --resume` reprend le même session_id, et un `off` doit survivre au
 # redémarrage plutôt que de repartir en pings sans prévenir.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"

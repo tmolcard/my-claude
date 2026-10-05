@@ -6,8 +6,13 @@
 #   KEEPALIVE_DELAY      secondes avant ping (défaut 3300 = 55 min)
 #   KEEPALIVE_MAX_PINGS  pings consécutifs sans activité humaine avant abandon
 #                        (défaut 0 = sans limite, on ping tant que la session vit)
-#   KEEPALIVE_PROMPT     texte du ping ; le préfixe [keepalive] est ajouté s'il manque
-#   KEEPALIVE_STATS      1 (défaut) joint un instantané CPU/RAM/disque/GPU au ping, 0 l'omet
+#   KEEPALIVE_MODE       warmup (défaut) : le ping ne fait que réchauffer le cache, le
+#                        modèle répond « OK » en un appel ; monitoring : le ping demande
+#                        de relire la mission, vérifier les runs, enchaîner (cas 1/2/3)
+#   KEEPALIVE_PROMPT     texte du ping, remplace celui du mode ; le préfixe [keepalive]
+#                        est ajouté s'il manque
+#   KEEPALIVE_STATS      joint un instantané CPU/RAM/disque/GPU au ping (1) ou non (0) ;
+#                        sans valeur : 1 en monitoring, 0 en warmup
 #   KEEPALIVE_DISABLE=1  désactive complètement
 #   KEEPALIVE_QUIET=1    /keepalive répond dans le terminal seulement, sans tour de
 #                        modèle (par défaut la réponse passe par la conversation,
@@ -23,7 +28,8 @@ command -v jq >/dev/null || exit 0
 # compteur. Il survit à un changement de texte et à l'ajout des stats, d'où son
 # ajout d'office si un prompt personnalisé l'oublie.
 PREFIX="[keepalive]"
-DEFAULT_PROMPT="[keepalive] Réveil automatique après inactivité. Relis la mission confiée dans cette session. Cas 1 : aucune mission en cours, ou tout est terminé → réponds uniquement \"OK\". Cas 2 : des runs que tu as lancées tournent encore → vérifie brièvement qu'elles sont vivantes et progressent (pgrep, queue, dernières lignes de log) ; réponds \"OK\", ou signale en une ligne ce qui a planté. Cas 3 : la mission t'autorise à enchaîner (ex. recherche d'hyperparamètres) et les ressources sont libres → prends du recul : compare les derniers résultats aux précédents, choisis la prochaine run selon les critères fixés dans la mission, lance-la, et résume en deux lignes ce que tu as appris et ce que tu lances. Dans tous les cas : ne sors pas du périmètre défini avant la loop, et si le budget ou le critère d'arrêt est atteint, ou si deux runs consécutives ont échoué pour la même raison, ne relance pas — dis-le en une ligne et attends."
+WARMUP_PROMPT="[keepalive] Réchauffage du cache uniquement. Réponds exactement « OK », sans outil, sans vérification, sans commentaire."
+MONITORING_PROMPT="[keepalive] Réveil automatique après inactivité. Relis la mission confiée dans cette session. Cas 1 : aucune mission en cours, ou tout est terminé → réponds uniquement \"OK\". Cas 2 : des runs que tu as lancées tournent encore → vérifie brièvement qu'elles sont vivantes et progressent (pgrep, queue, dernières lignes de log) ; réponds \"OK\", ou signale en une ligne ce qui a planté. Cas 3 : la mission t'autorise à enchaîner (ex. recherche d'hyperparamètres) et les ressources sont libres → prends du recul : compare les derniers résultats aux précédents, choisis la prochaine run selon les critères fixés dans la mission, lance-la, et résume en deux lignes ce que tu as appris et ce que tu lances. Dans tous les cas : ne sors pas du périmètre défini avant la loop, et si le budget ou le critère d'arrêt est atteint, ou si deux runs consécutives ont échoué pour la même raison, ne relance pas — dis-le en une ligne et attends."
 
 INPUT=$(cat)
 SESSION_ID=$(jq -r '.session_id // empty' <<<"$INPUT")
@@ -33,7 +39,7 @@ valid_session_id "$SESSION_ID" || exit 0
 ensure_state_dir || exit 0
 S="$STATE_DIR/$SESSION_ID"
 PID_FILE=$S.pid CNT_FILE=$S.count DUE_FILE=$S.due LAST_FILE=$S.last
-NOW_FILE=$S.now OFF_FILE=$S.off DELAY_FILE=$S.delay MAX_FILE=$S.max STATS_FILE=$S.stats PROMPT_FILE=$S.prompt
+NOW_FILE=$S.now OFF_FILE=$S.off DELAY_FILE=$S.delay MAX_FILE=$S.max STATS_FILE=$S.stats PROMPT_FILE=$S.prompt MODE_FILE=$S.mode
 
 # Config effective : variables d'env, puis surcharges de la session. Relue aussi
 # par le timer au moment du ping, pour qu'un /keepalive prompt ou stats tapé
@@ -46,8 +52,15 @@ load_config() {
   # plafond ignoré : on revient aux défauts plutôt que de désactiver sans le dire.
   case "$DELAY" in ''|*[!0-9]*) DELAY=3300 ;; esac
   case "$MAX"   in ''|*[!0-9]*) MAX=0     ;; esac
-  STATS=0; [ "${KEEPALIVE_STATS:-1}" = "1" ] && STATS=1
-  PROMPT_MSG=${KEEPALIVE_PROMPT:-$DEFAULT_PROMPT}
+  # Mode : env, puis session ; toute valeur inconnue retombe sur warmup, le moins cher.
+  MODE=${KEEPALIVE_MODE:-warmup}
+  case "$MODE" in warmup|monitoring) ;; *) MODE=warmup ;; esac
+  v=$(cat "$MODE_FILE" 2>/dev/null); case "$v" in warmup|monitoring) MODE=$v ;; esac
+  # Stats et prompt : un réglage explicite (env puis session) gagne, sinon c'est le mode qui décide.
+  case "${KEEPALIVE_STATS:-}" in 1) STATS=1 ;; 0) STATS=0 ;; *) [ "$MODE" = monitoring ] && STATS=1 || STATS=0 ;; esac
+  if [ -n "${KEEPALIVE_PROMPT:-}" ]; then PROMPT_MSG=$KEEPALIVE_PROMPT
+  elif [ "$MODE" = monitoring ]; then PROMPT_MSG=$MONITORING_PROMPT
+  else PROMPT_MSG=$WARMUP_PROMPT; fi
 
   v=$(cat "$DELAY_FILE" 2>/dev/null); case "$v" in ''|*[!0-9]*) ;; *) DELAY=$v ;; esac
   v=$(cat "$MAX_FILE"   2>/dev/null); case "$v" in ''|*[!0-9]*) ;; *) MAX=$v   ;; esac

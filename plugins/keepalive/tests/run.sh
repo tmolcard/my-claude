@@ -8,6 +8,7 @@ TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 export KEEPALIVE_STATE_DIR="$TMP/state"   # jamais l'état des sessions réelles
 STATE="$KEEPALIVE_STATE_DIR"
 PREFIX="[keepalive]"
+export LC_ALL=C.UTF-8   # sous-chaînes en caractères, pas en octets
 
 # ── stub tmux : capture-pane sert un pane simulé, le reste est journalisé
 mkdir -p "$TMP/bin"
@@ -135,11 +136,26 @@ S=t19-$$; clean; KEEPALIVE_STATS=0 KEEPALIVE_PROMPT="deux
 lignes" run Stop "" $S; sleep 3
 ok "retour à la ligne aplati (pas de validation à mi-chemin)" "$(cat "$TMUX_STUB_LOG")" "$PREFIX deux lignes"
 
+echo "── Modes warmup (défaut) et monitoring"
+WARM="$PREFIX Réchauffage du cache uniquement. Réponds exactement « OK », sans outil, sans vérification, sans commentaire."
+S=m1-$$; clean; run Stop "" $S; sleep 3
+ok "défaut : ping warmup, texte exact" "$(cat "$TMUX_STUB_LOG")" "$WARM"
+ok "défaut : pas de relevé machine" "$(grep -c 'Ressources machine' "$TMUX_STUB_LOG")" "0"
+S=m2-$$; clean; KEEPALIVE_MODE=monitoring run Stop "" $S; sleep 3
+ok "monitoring : prompt de mission" "$(grep -c 'Relis la mission' "$TMUX_STUB_LOG")" "1"
+ok "monitoring : relevé machine joint" "$(grep -c 'Ressources machine' "$TMUX_STUB_LOG")" "1"
+S=m3-$$; clean; KEEPALIVE_MODE=monitoring KEEPALIVE_STATS=0 run Stop "" $S; sleep 3
+ok "monitoring + STATS=0 : relevé omis" "$(grep -c 'Ressources machine' "$TMUX_STUB_LOG")" "0"
+S=m4-$$; clean; KEEPALIVE_STATS=1 run Stop "" $S; sleep 3
+ok "warmup + STATS=1 : relevé joint quand même" "$(grep -c 'Ressources machine' "$TMUX_STUB_LOG")" "1"
+S=m5-$$; clean; KEEPALIVE_MODE=abc run Stop "" $S; sleep 3
+ok "mode inconnu : retombe sur warmup" "$(cat "$TMUX_STUB_LOG")" "$WARM"
+
 echo "── Instantané des ressources joint au ping"
-S=t20-$$; clean; KEEPALIVE_PROMPT="court" run Stop "" $S; sleep 3
-ok "les ressources sont jointes par défaut" "$(grep -c 'Ressources machine' "$TMUX_STUB_LOG")" "1"
+S=t20-$$; clean; KEEPALIVE_MODE=monitoring KEEPALIVE_PROMPT="court" run Stop "" $S; sleep 3
+ok "en monitoring, les ressources sont jointes par défaut" "$(grep -c 'Ressources machine' "$TMUX_STUB_LOG")" "1"
 ok "et restent sur une seule ligne" "$(wc -l < "$TMUX_STUB_LOG" | tr -d ' ')" "1"
-S=t21-$$; clean; KEEPALIVE_STATS=0 KEEPALIVE_PROMPT="court" run Stop "" $S; sleep 3
+S=t21-$$; clean; KEEPALIVE_MODE=monitoring KEEPALIVE_STATS=0 KEEPALIVE_PROMPT="court" run Stop "" $S; sleep 3
 ok "KEEPALIVE_STATS=0 les omet" "$(grep -c 'Ressources machine' "$TMUX_STUB_LOG")" "0"
 
 echo "── Valeurs de config invalides"
@@ -221,9 +237,25 @@ S=c7-$$; clean; mkdir -p "$STATE"; echo 2 > "$STATE/$S.count"; run Stop "" $S; c
 ok "max 2 avec 2 pings déjà faits : timer coupé" "$(armed $S)" "non"
 ok "… et status explique la pause" "$(cmd status | reason | grep -c 'plafond de 2')" "1"
 cmd "max 0" >/dev/null; ok "max 0 : sans limite, réarmé" "$(armed $S)" "oui"
-cmd off >/dev/null; cmd "delay 5m" >/dev/null; cmd reset >/dev/null
-ok "reset efface les réglages de session" "$(ls "$STATE" | grep -cE "^$S\.(off|delay|max)$")" "0"
+cmd off >/dev/null; cmd "delay 5m" >/dev/null; cmd monitoring >/dev/null; cmd reset >/dev/null
+ok "reset efface les réglages de session" "$(ls "$STATE" | grep -cE "^$S\.(off|delay|max|mode)$")" "0"
 ok "reset réarme" "$(armed $S)" "oui"
+
+S=c8-$$; clean; run Stop "" $S
+ok "status : annonce le mode warmup" "$(cmd status | reason | grep -c '^mode warmup ')" "1"
+cmd "mode monitoring" >/dev/null
+ok "mode monitoring : enregistré pour la session" "$(cat "$STATE/$S.mode")" "monitoring"
+sleep 3; ok "… et appliqué au ping déjà armé" "$(grep -c 'Relis la mission' "$TMUX_STUB_LOG")" "1"
+ok "… relevé machine inclus" "$(grep -c 'Ressources machine' "$TMUX_STUB_LOG")" "1"
+cmd warmup >/dev/null
+ok "raccourci warmup : enregistré" "$(cat "$STATE/$S.mode")" "warmup"
+ok "status : annonce le mode warmup (session)" "$(cmd status | reason | grep -c 'mode warmup (session)')" "1"
+OUT=$(cmd "mode abc"); ok "mode invalide refusé" "$(reason <<<"$OUT" | grep -c 'warmup, monitoring ou reset')" "1"
+ok "… sans écraser le réglage" "$(cat "$STATE/$S.mode")" "warmup"
+OUT=$(cmd mode); ok "mode sans argument : décrit l'état" "$(reason <<<"$OUT" | grep -c '^mode : warmup')" "1"
+cmd "mode reset" >/dev/null; ok "mode reset" "$([ -f "$STATE/$S.mode" ] && echo oui || echo non)" "non"
+S=c9-$$; clean; cmd "prompt coucou" >/dev/null; cmd monitoring >/dev/null; run Stop "" $S; sleep 3
+ok "un prompt de session prime sur le mode" "$(grep -c 'coucou' "$TMUX_STUB_LOG")" "1"
 clean
 unset KEEPALIVE_QUIET
 
@@ -232,8 +264,11 @@ ctx(){ jq -r '.hookSpecificOutput.additionalContext // empty'; }
 S=v1-$$; clean; mkdir -p "$STATE"; echo 4 > "$STATE/$S.count"
 OUT=$(cmd status)
 ok "status : le prompt n'est pas bloqué" "$(jq -r '.decision // "passe"' <<<"$OUT")" "passe"
-ok "status : résultat en contexte additionnel" "$(ctx <<<"$OUT" | head -1 | cut -c1-37)" "[keepalive-résultat] **keepalive** · "
+# Sous-chaîne bash et non `cut -c` : le cut GNU compte des octets, pas des caractères.
+HEAD=$(ctx <<<"$OUT" | head -1)
+ok "status : résultat en contexte additionnel" "${HEAD:0:37}" "[keepalive-résultat] **keepalive** · "
 ok "status : annonce l'échéance après la réponse" "$(ctx <<<"$OUT" | grep -c 'après cette réponse')" "1"
+ok "status : ligne Mode dans le tableau" "$(ctx <<<"$OUT" | grep -c '^| Mode | warmup |')" "1"
 ok "compteur inchangé" "$(cat "$STATE/$S.count")" "4"
 OUT=$(cmd off); ok "off : confirmé en contexte" "$(ctx <<<"$OUT" | grep -c 'coupé')" "1"
 ok "off : appliqué par le hook" "$([ -f "$STATE/$S.off" ] && echo oui || echo non)" "oui"

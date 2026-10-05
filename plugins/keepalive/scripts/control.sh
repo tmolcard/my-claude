@@ -12,7 +12,7 @@
 #    mais la raison ne s'affiche que dans le terminal.
 QUIET=0; [ "${KEEPALIVE_QUIET:-0}" = "1" ] && QUIET=1
 
-HELP="Commandes : /keepalive [status] · on · off · now · delay 30m|1h|reset · prompt <texte>|reset · stats on|off|reset · max <N>|reset (0 = sans limite) · reset"
+HELP="Commandes : /keepalive [status] · on · off · now · warmup | monitoring (ou mode warmup|monitoring|reset) · delay 30m|1h|reset · prompt <texte>|reset · stats on|off|reset · max <N>|reset (0 = sans limite) · reset"
 
 reply() {
   if [ "$QUIET" = "1" ]; then
@@ -108,23 +108,27 @@ status_text() {
   count=$(cat "$CNT_FILE" 2>/dev/null || echo 0)
   if [ -s "$PROMPT_FILE" ] || [ -n "${KEEPALIVE_PROMPT:-}" ]; then
     prompt_txt="« ${PROMPT_MSG:0:160}$([ ${#PROMPT_MSG} -gt 160 ] && echo …) »$(src "$PROMPT_FILE" "${KEEPALIVE_PROMPT:-}")"
+  elif [ "$MODE" = monitoring ]; then
+    prompt_txt="par défaut du mode monitoring (relecture de la mission, cas 1/2/3)"
   else
-    prompt_txt="par défaut (relecture de la mission, cas 1/2/3)"
+    prompt_txt="par défaut du mode warmup (« OK » seul, aucun outil)"
   fi
   if [ "$QUIET" = "0" ]; then
     # Markdown : recopié par le modèle, il est rendu proprement dans l'app comme
     # dans le terminal. Les | du prompt casseraient le tableau.
-    printf '**keepalive** · %s\n\n| Réglage | Valeur |\n|---|---|\n| Délai | %s%s |\n| Plafond | %s%s |\n| Stats machine | %s%s |\n| Pings d%saffilée | %s |\n| Prompt | %s |\n\n%s' \
+    printf '**keepalive** · %s\n\n| Réglage | Valeur |\n|---|---|\n| Mode | %s%s |\n| Délai | %s%s |\n| Plafond | %s%s |\n| Stats machine | %s%s |\n| Pings d%saffilée | %s |\n| Prompt | %s |\n\n%s' \
       "$(state_line)" \
+      "$MODE" "$(src "$MODE_FILE" "${KEEPALIVE_MODE:-}")" \
       "$(fmt_dur "$DELAY")" "$(src "$DELAY_FILE" "${KEEPALIVE_DELAY:-}")" \
       "$max_txt" "$(src "$MAX_FILE" "${KEEPALIVE_MAX_PINGS:-}")" \
       "$stats_txt" "$(src "$STATS_FILE" "${KEEPALIVE_STATS:-}")" \
       "'" "$count" "${prompt_txt//|/\\|}" \
-      "\`/keepalive on | off | now | delay 30m | prompt … | stats on/off | max N | reset\`"
+      "\`/keepalive on | off | now | warmup | monitoring | delay 30m | prompt … | stats on/off | max N | reset\`"
     return
   fi
-  printf 'keepalive : %s\ndélai %s%s · plafond %s%s · stats %s%s · pings d%saffilée %s\nprompt : %s\n%s' \
+  printf 'keepalive : %s\nmode %s%s · délai %s%s · plafond %s%s · stats %s%s · pings d%saffilée %s\nprompt : %s\n%s' \
     "$(state_line)" \
+    "$MODE" "$(src "$MODE_FILE" "${KEEPALIVE_MODE:-}")" \
     "$(fmt_dur "$DELAY")" "$(src "$DELAY_FILE" "${KEEPALIVE_DELAY:-}")" \
     "$max_txt" "$(src "$MAX_FILE" "${KEEPALIVE_MAX_PINGS:-}")" \
     "$stats_txt" "$(src "$STATS_FILE" "${KEEPALIVE_STATS:-}")" \
@@ -173,6 +177,19 @@ handle_command() {
       [ "$DELAY" -ge 3600 ] && warn=$'\n'"attention : au-delà de 60 min, le cache (TTL 1 h) aura expiré avant le ping."
       reply "délai : $(fmt_dur "$DELAY")$(src "$DELAY_FILE" "${KEEPALIVE_DELAY:-}") · $(state_line)$warn" ;;
 
+    # Deux états : warmup (« OK » seul, le moins cher) et monitoring (mission + relevé
+    # machine). Un prompt ou des stats réglés explicitement priment sur le mode.
+    mode|warmup|monitoring)
+      [ "$sub" != mode ] && rest=$sub
+      case "$rest" in
+        "")                reply "mode : $MODE$(src "$MODE_FILE" "${KEEPALIVE_MODE:-}") · prompt : « ${PROMPT_MSG:0:120}$([ ${#PROMPT_MSG} -gt 120 ] && echo …) » · stats machine : $([ "$STATS" = 1 ] && echo oui || echo non)"; return ;;
+        reset)             rm -f "$MODE_FILE" ;;
+        warmup|monitoring) printf '%s' "$rest" > "$MODE_FILE" ;;
+        *)                 reply "mode : warmup, monitoring ou reset."; return ;;
+      esac
+      load_config
+      reply "mode $MODE (appliqué dès le prochain ping) · prompt : « ${PROMPT_MSG:0:120}$([ ${#PROMPT_MSG} -gt 120 ] && echo …) » · stats machine : $([ "$STATS" = 1 ] && echo oui || echo non)" ;;
+
     prompt)
       case "$rest" in
         "")    ;;
@@ -204,7 +221,7 @@ handle_command() {
       reply "plafond : $([ "$MAX" -gt 0 ] && echo "$MAX pings d'affilée" || echo "aucun")$(src "$MAX_FILE" "${KEEPALIVE_MAX_PINGS:-}") · $(state_line)" ;;
 
     reset)
-      rm -f "$OFF_FILE" "$DELAY_FILE" "$PROMPT_FILE" "$STATS_FILE" "$MAX_FILE"
+      rm -f "$OFF_FILE" "$DELAY_FILE" "$PROMPT_FILE" "$STATS_FILE" "$MAX_FILE" "$MODE_FILE"
       load_config; rearm
       reply "réglages de session effacés, retour aux valeurs d'env/défaut."$'\n'"$(status_text)" ;;
 
